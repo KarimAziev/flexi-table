@@ -1,0 +1,477 @@
+#+OPTIONS: ^:nil tags:nil num:nil
+
+[[https://github.com/KarimAziev/flexi-table/actions/workflows/ci.yml][https://github.com/KarimAziev/flexi-table/actions/workflows/ci.yml/badge.svg]]
+[[https://github.com/KarimAziev/flexi-table/actions/workflows/melpazoid.yml][https://github.com/KarimAziev/flexi-table/actions/workflows/melpazoid.yml/badge.svg]]
+[[https://www.gnu.org/licenses/gpl-3.0][https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg]]
+
+* About
+
+=flexi-table= is a dynamic tabulated-view renderer for Emacs packages.  It is
+intended for views whose rows arrive or change asynchronously and whose users
+need more control than a fixed =tabulated-list-mode= layout provides.
+
+A table consists of ordinary Lisp objects and declarative column
+specifications:
+
+#+begin_src elisp
+((name     :name "Name"  :width 24)
+ (language :name "Lang"  :width 12 :filterable t)
+ (stars    :name "Stars" :width 7  :align right))
+#+end_src
+
+The renderer supplies the buffer mode, row and header rendering, sorting,
+filtering, column editing, incremental updates, and Transient interfaces.  A
+consumer remains responsible for obtaining its data and deciding what an
+entry means.
+
+The implementation was extracted from [[https://github.com/KarimAziev/igist][igist]] and generalized while adding
+stable asynchronous updates, declarative filters, consumer-scoped layouts,
+and metric-safe styled headers.
+
+** Highlights
+
+- Resize columns immediately with ={= and =}=.  Only nearby visible rows need
+  to be repainted while a resize is in progress; the full render is coalesced
+  on an idle timer.
+- Add, remove, reorder, rename, align, and resize columns while the table is
+  open.  The =C= or =?= Transient exposes the complete column editor.
+- Sort from the keyboard or by clicking a heading.  Columns can provide custom
+  value getters and comparison predicates.
+- Turn selected cells into filter buttons with =:filterable t=.  Filters can be
+  toggled from a cell or managed through the =/= Transient.
+- Append or replace rows incrementally.  Bursts of asynchronous callbacks are
+  coalesced without moving point, changing the selected column, or disturbing
+  window anchors.
+- Keep a package's status =header-line-format= while rendering the table
+  headings in an overlay, or use a normal header line when it is available.
+- Style headers, cells, sorted columns, filtered columns, and filter buttons
+  independently.  Header decoration cannot change the column geometry.
+- Persist a customized layout back to a consumer-owned Custom variable.
+
+* Requirements
+
+| Dependency  | Minimum version |
+|-------------+-----------------|
+| Emacs       | 29.1            |
+| =transient= | 0.13.4          |
+
+* Installation
+
+The package is not yet distributed through an ELPA archive.  Install it
+directly from this repository using one of the following methods.
+
+** package-vc
+
+With Emacs 29 or newer:
+
+#+begin_src elisp
+(package-vc-install
+ '(flexi-table :url "https://github.com/KarimAziev/flexi-table"))
+#+end_src
+
+With =use-package= and Emacs 30 or newer:
+
+#+begin_src elisp
+(use-package flexi-table
+  :vc (:url "https://github.com/KarimAziev/flexi-table"
+       :rev :newest))
+#+end_src
+
+** straight.el
+
+#+begin_src elisp
+(use-package flexi-table
+  :straight (:host github
+             :repo "KarimAziev/flexi-table"))
+#+end_src
+
+** Quelpa
+
+#+begin_src elisp
+(use-package flexi-table
+  :quelpa (flexi-table
+           :fetcher github
+           :repo "KarimAziev/flexi-table"))
+#+end_src
+
+** Doom Emacs
+
+Add this to =$DOOMDIR/packages.el=:
+
+#+begin_src elisp
+(package! flexi-table
+  :recipe (:host github :repo "KarimAziev/flexi-table"))
+#+end_src
+
+Then run =doom sync=.  No additional key bindings are required; the commands
+described below are already part of =flexi-table-mode-map=.
+
+** Manual installation
+
+#+begin_src sh
+git clone https://github.com/KarimAziev/flexi-table.git \
+  ~/.emacs.d/site-lisp/flexi-table
+#+end_src
+
+#+begin_src elisp
+(add-to-list 'load-path "~/.emacs.d/site-lisp/flexi-table")
+(require 'flexi-table)
+#+end_src
+
+* Quick start
+
+The following example renders alists, enables filtering by language, and
+allows the optional =Updated= column to be added interactively:
+
+#+begin_src elisp
+(require 'flexi-table)
+
+(defvar my-repository-columns
+  '((name
+     :name "Name"
+     :width 24)
+    (description
+     :name "Description"
+     :width "35%"
+     :min-width 20)
+    (language
+     :name "Lang"
+     :width 12
+     :filterable t)
+    (stars
+     :name "Stars"
+     :width 7
+     :align right
+     :sort-predicate <)))
+
+(defvar my-repository-all-columns
+  (append
+   my-repository-columns
+   '((updated_at
+      :name "Updated"
+      :width 20
+      :formatter (lambda (value)
+                   (or value "Never"))))))
+
+(define-derived-mode my-repository-mode flexi-table-mode "Repositories"
+  "Major mode for the example repository table.")
+
+(defun my-repository-list ()
+  (interactive)
+  (let ((buffer (get-buffer-create "*Repositories*"))
+        (entries
+         '(((id . 1) (name . "flexi-table")
+            (description . "Dynamic tables for Emacs")
+            (language . "Emacs Lisp") (stars . 12))
+           ((id . 2) (name . "example")
+            (description . "Another package")
+            (language . "Rust") (stars . 4)))))
+    (with-current-buffer buffer
+      (my-repository-mode)
+      (flexi-table-setup
+       my-repository-columns entries
+       :key-function (lambda (entry) (alist-get 'id entry))
+       :available-columns my-repository-all-columns
+       :sort-key '("Name" . nil)))
+    (pop-to-buffer buffer)))
+#+end_src
+
+=flexi-table-setup= also activates =flexi-table-mode= when the current buffer
+is not already derived from it.  Defining a derived mode is nevertheless
+useful for consumer-specific commands, key bindings, and buffer setup.
+
+* Column specifications
+
+A column has the form =(FIELD . PROPERTIES)=, conventionally written as:
+
+#+begin_src elisp
+(field :name "Heading" :width 20 ...)
+#+end_src
+
+When no =:getter= is supplied, =FIELD= is used as an alist key.  It can also be
+a list describing a nested alist path, for example =((owner login) :name
+"Owner")=.  Arbitrary entry types are supported through =:getter=.
+
+| Property            | Meaning |
+|---------------------+---------|
+| =:name=             | Displayed heading.  Defaults to a humanized form of =FIELD=. |
+| =:width=            | Width in characters, a numeric string, pixels such as ="120px"=, or a window percentage such as ="30%"=. |
+| =:min-width=        | Optional lower bound using the same syntax as =:width=. |
+| =:max-width=        | Optional upper bound using the same syntax as =:width=. |
+| =:pad-right=        | Spaces between this column and the next; defaults to 1. |
+| =:align=            | =left=, =center=, or =right=, as a symbol or string. |
+| =:getter=           | Function called with =(ENTRY TABLE-BUFFER)= to return the raw value. |
+| =:formatter=        | Function called with the raw value, or a =format= control string. |
+| =:displayer=        | Function called with =(FORMATTED MAX-PIXELS TABLE-BUFFER)= for final display processing. |
+| =:sortable=         | Whether sorting is allowed.  Sorting is enabled by default. |
+| =:sort-predicate=   | Less-than predicate called with two raw values. |
+| =:filterable=       | Whether non-empty cells act as filter buttons. |
+| =:filter-predicate= | Function called with =(CELL-VALUE SELECTED-VALUE ENTRY TABLE-BUFFER)=.  Providing one also makes the column filterable. |
+| =:face=             | Face applied to the column's cells. |
+| =:color=            | Foreground color or face-like value used when =:face= is absent. |
+| =:header-face=      | Face used for this column's heading. |
+
+Rows other than the final column are truncated to their effective width.  The
+final column is allowed to extend naturally.
+
+* Setup options
+
+#+begin_src elisp
+(flexi-table-setup
+ COLUMNS ENTRIES
+ :key-function KEY-FUNCTION
+ :available-columns AVAILABLE-COLUMNS
+ :columns-variable COLUMNS-VARIABLE
+ :filter-function FILTER-FUNCTION
+ :mode-name-function MODE-NAME-FUNCTION
+ :sort-key SORT-KEY)
+#+end_src
+
+- =KEY-FUNCTION= is required in practice.  It receives an entry and must return
+  a stable, unique row identifier.
+- =AVAILABLE-COLUMNS= is the complete catalog from which hidden columns may be
+  added.  It defaults to =COLUMNS=.
+- =COLUMNS-VARIABLE= names a consumer-owned Custom variable.  When present,
+  =flexi-table-save-columns= saves the edited layout to that variable.
+- =FILTER-FUNCTION= is a consumer predicate called for every entry.  It is
+  composed with the declarative per-column filters.
+- =MODE-NAME-FUNCTION= receives the total entry count and returns the desired
+  mode-line name.
+- =SORT-KEY= is =(COLUMN-NAME . DESCENDING)=.  A nil cdr means ascending.
+
+The active table state is buffer-local, so multiple consumers and multiple
+buffers can use independent column layouts, filters, and sorting.
+
+* Updating data
+
+** Replacing and appending
+
+Replace the complete data set with:
+
+#+begin_src elisp
+(flexi-table-set-entries entries t)
+#+end_src
+
+The optional second argument preserves the selected row and column.
+
+Append previously unseen entries and update entries whose identifiers already
+exist with:
+
+#+begin_src elisp
+(flexi-table-append-entries entries)
+#+end_src
+
+Remove a row by its stable identifier:
+
+#+begin_src elisp
+(flexi-table-remove-entry id)
+#+end_src
+
+** Incremental and asynchronous updates
+
+For one immediate update:
+
+#+begin_src elisp
+(flexi-table-update-entry entry)
+#+end_src
+
+For several updates that arrive together:
+
+#+begin_src elisp
+(flexi-table-update-entries entries)
+#+end_src
+
+For network callbacks or other streams, queue each changed entry:
+
+#+begin_src elisp
+(with-current-buffer table-buffer
+  (setf (alist-get 'stars entry) new-star-count)
+  (flexi-table-queue-entry-update entry))
+#+end_src
+
+Updates received within =flexi-table-async-update-delay= are coalesced into one
+render.  Point, the logical row and column, window starts, horizontal scroll,
+and vertical scroll are preserved independently for every window displaying
+the table.
+
+When a sort is active, row replacement schedules an ordered refresh.  When a
+consumer filter or declarative filter is active, visibility is recomputed
+automatically.
+
+* Sorting and filtering
+
+All columns are sortable unless they declare =:sortable nil=.  Press =s= on a
+cell or click its heading to sort; repeat the action to reverse the order.  A
+column's =:sort-predicate= compares raw values.  Without one, numbers sort
+numerically, strings use case-insensitive collation, and other values use their
+printed representation.
+
+A column with =:filterable t= renders its non-empty values as buttons.  Click a
+cell or press =f= on it to toggle a filter for that raw value.  Multiple column
+filters are combined with logical AND.  Press =/= to open the filter Transient,
+where filters can be selected from all values, removed individually, or reset.
+
+Use =:filter-predicate= for matching rules other than =equal=.  For example,
+this column treats the selected value as a lower bound:
+
+#+begin_src elisp
+(score
+ :name "Score"
+ :width 8
+ :align right
+ :filter-predicate
+ (lambda (cell-value selected-value _entry _buffer)
+   (>= cell-value selected-value)))
+#+end_src
+
+* Editing columns
+
+Press =C= or =?= to open the column Transient.  It presents the active layout
+as structured, wrapped lines and provides operations for:
+
+- selecting or renaming a column;
+- setting, increasing, or decreasing its width;
+- toggling sortability;
+- cycling alignment and setting right padding;
+- sorting by the selected column;
+- moving, adding, or removing columns; and
+- resetting or saving the complete layout.
+
+Fast resizing is controlled by =flexi-table-resize-strategy=.  Its default
+value, 20, repaints at most twenty nearby visible rows immediately and queues a
+complete idle refresh.  It can instead be =nil= for the current row only,
+=visible= for all visible rows, or =t= for a synchronous full render.
+
+To let users persist a layout, define the columns with =defcustom= and pass its
+symbol through =:columns-variable=:
+
+#+begin_src elisp
+(defcustom my-package-columns
+  '((name :name "Name" :width 24)
+    (state :name "State" :width 12 :filterable t))
+  "Columns displayed by `my-package-list'."
+  :type '(repeat sexp)
+  :group 'my-package)
+
+(flexi-table-setup
+ my-package-columns entries
+ :key-function #'my-package-entry-id
+ :columns-variable 'my-package-columns)
+#+end_src
+
+The saved value is scoped to the consumer's variable; =flexi-table= does not
+maintain one global layout shared by unrelated packages.
+
+* Headers and faces
+
+By default, headings use =header-line-format=.  Set
+=flexi-table-use-header-line= to nil before calling =flexi-table-setup= when a
+consumer needs the real header line for status information:
+
+#+begin_src elisp
+(setq-local flexi-table-use-header-line nil)
+(setq-local header-line-format '("Loading repositories…"))
+(flexi-table-setup columns entries
+                   :key-function #'my-entry-id)
+#+end_src
+
+In that configuration the table heading is displayed in an overlay at the top
+of the buffer and the consumer's =header-line-format= remains untouched.
+
+The following faces can be customized:
+
+| Face                                  | Purpose |
+|---------------------------------------+---------|
+| =flexi-table-cell=                    | Shared fixed-pitch metric layer for rows and headings. |
+| =flexi-table-header=                  | General heading background and decoration. |
+| =flexi-table-header-column=           | Normal column names. |
+| =flexi-table-header-column-sorted=    | Actively sorted column. |
+| =flexi-table-header-column-filtered=  | Column with an active filter. |
+| =flexi-table-filter-button=           | Clickable filterable cells. |
+| =flexi-table-filter-button-active=    | Cell matching its column's active filter. |
+
+The metric face is applied with higher precedence than decorative header
+faces, including on the spaces between columns.  Consequently a theme may use
+a proportional UI font for =header-line= without causing cumulative drift
+between headings and row cells.
+
+* Default key bindings
+
+| Key       | Command |
+|-----------+---------|
+| =C=, =?=  | Open =flexi-table-columns-menu=. |
+| =/=       | Open =flexi-table-filters-menu=. |
+| =s=       | Sort by the column at point. |
+| =f=       | Toggle a filter using the cell at point. |
+| ={=, =}=  | Narrow or widen the current column. |
+| =M-[=, =M-]= | Move the current column left or right. |
+| =C-M-b=, =C-M-f= | Move to the previous or next column. |
+| =C-c C-a= | Add a hidden column. |
+| =C-c C-d= | Remove a column. |
+| =C-c C-e= | Edit a column property. |
+| =C-c C-s= | Save the current layout to its configured Custom variable. |
+| =mouse-1= on a heading | Sort by that column. |
+| =mouse-1= on a filterable cell | Toggle its value filter. |
+
+* Configuration
+
+Run =M-x customize-group RET flexi-table RET= to inspect all user options.
+The most relevant ones are:
+
+- =flexi-table-padding=;
+- =flexi-table-use-header-line=;
+- =flexi-table-resize-strategy= and =flexi-table-resize-idle-delay=;
+- =flexi-table-async-update-delay=;
+- =flexi-table-column-comp-read-threshold=;
+- =flexi-table-menu-column-line-width=; and
+- the graphical and terminal sort indicators.
+
+* Development
+
+The repository uses a plain Makefile as its development interface.  GNU Make,
+Emacs, and network access for the initial dependency installation are the only
+requirements.
+
+#+begin_src sh
+# Install transient and development tools into .packages/.
+make deps
+
+# Byte-compile, run all ERT tests, Checkdoc, and package-lint.
+make check
+
+# Run individual stages.
+make compile
+make test
+make lint
+
+# Remove generated byte-code.
+make clean
+#+end_src
+
+Dependencies are installed into the ignored =.packages/= directory rather
+than the user's Emacs configuration.  Override the executable or package
+directory when necessary:
+
+#+begin_src sh
+make EMACS=/path/to/emacs PACKAGE_DIR=/tmp/flexi-table-packages check
+#+end_src
+
+GitHub Actions runs compilation and ERT on the minimum supported Emacs, a
+newer stable release, and a snapshot build.  The snapshot job is informational
+so an upstream development regression does not block changes.  A separate job
+runs Checkdoc and package-lint, while the Melpazoid workflow checks MELPA
+packaging conventions.
+
+A Cask or Eask manifest is intentionally unnecessary at present.  Cask remains
+useful for older established workflows, and Eask is convenient when a project
+wants an all-in-one package manager and task runner.  For this single-file
+library, the Makefile plus =package.el= keeps the local and CI paths explicit
+and introduces fewer bootstrap dependencies.  One can be added later without
+changing the public development commands.
+
+* License
+
+Copyright © 2026 Karim Aziiev.
+
+This project is distributed under the GNU General Public License, version 3 or
+later.  See [[file:LICENSE][LICENSE]].
