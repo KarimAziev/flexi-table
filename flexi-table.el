@@ -723,7 +723,8 @@ LAST-COLUMN-P means not to force trailing padding beyond the column width."
   (dolist (window-state (plist-get state :windows))
     (let ((window (plist-get window-state :window)))
       (when (and (window-live-p window)
-                 (eq (window-buffer window) (current-buffer)))
+                 (eq (window-buffer window)
+                     (current-buffer)))
         (let ((window-point
                (save-excursion
                  (flexi-table--goto-location
@@ -1179,7 +1180,12 @@ A COLUMN-NUMBER of -1 restores unsorted entry order."
       (unless column
         (user-error "No table column at point"))
       (flexi-table--sort-by-name
-       (flexi-table--column-name column)))))
+       (flexi-table--column-name column))
+      (when (save-excursion
+              (and (zerop (forward-line))
+                   (goto-char (line-end-position))
+                   (eobp)))
+        (recenter)))))
 
 (defun flexi-table-sort-by-click (event)
   "Sort by the column heading clicked in EVENT."
