@@ -1181,11 +1181,13 @@ A COLUMN-NUMBER of -1 restores unsorted entry order."
         (user-error "No table column at point"))
       (flexi-table--sort-by-name
        (flexi-table--column-name column))
-      (when (save-excursion
-              (and (zerop (forward-line))
-                   (goto-char (line-end-position))
-                   (eobp)))
-        (recenter)))))
+      (when-let* ((buff-wnd (get-buffer-window (current-buffer))))
+        (with-selected-window buff-wnd
+          (when (save-excursion
+                  (and (zerop (forward-line))
+                       (goto-char (line-end-position))
+                       (eobp)))
+            (recenter)))))))
 
 (defun flexi-table-sort-by-click (event)
   "Sort by the column heading clicked in EVENT."
