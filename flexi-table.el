@@ -205,6 +205,9 @@ not turn the transient into one dense horizontal sentence."
 (defvar-local flexi-table--row-markers nil
   "Map of row identifiers to start markers for fast incremental updates.")
 
+(defvar-local flexi-table-menu-extra-suffixes-description nil)
+(defvar-local flexi-table-menu-extra-suffixes nil)
+
 (defvar-local flexi-table--render-timer nil)
 (defvar-local flexi-table--update-timer nil)
 (defvar-local flexi-table--pending-updates nil)
@@ -245,6 +248,9 @@ not turn the transient into one dense horizontal sentence."
     (define-key map (kbd "/") #'flexi-table-filters-menu)
     map)
   "Keymap used by `flexi-table-mode'.")
+
+
+
 
 (define-derived-mode flexi-table-mode special-mode "Flexi-Table"
   "Major mode for dynamically editable, incrementally updated tables."
@@ -1861,52 +1867,81 @@ Use FALLBACK as its display value when VALUE is nil."
   (and flexi-table-columns-variable
        (custom-variable-p flexi-table-columns-variable)))
 
+(defun flexi-table-maybe-resume-columns-menu ()
+  "Resume the columns menu when it is the current transient command."
+  (when (eq transient-current-command
+            'flexi-table-columns-menu)
+    (transient-setup transient-current-command)))
+
 ;;;###autoload (autoload 'flexi-table-columns-menu "flexi-table" nil t)
 (transient-define-prefix flexi-table-columns-menu ()
   "Edit the current dynamic table's column layout."
+  :refresh-suffixes t
   ["Edit column"
    ("c" flexi-table-switch-column
     :description flexi-table--column-menu-description
     :transient t)]
   [["Properties"
     ("n" flexi-table-set-current-column-name
-     :description flexi-table--current-column-name-description
+     :description
+     flexi-table--current-column-name-description
      :transient t)
     ("w" flexi-table-set-current-column-width
-     :description flexi-table--current-column-width-description
+     :description
+     flexi-table--current-column-width-description
      :transient t)
     ("<right>" flexi-table-widen-current-column
-     :description flexi-table--increase-column-description
+     :description
+     flexi-table--increase-column-description
      :transient t)
     ("<left>" flexi-table-narrow-current-column
-     :description flexi-table--decrease-column-description
+     :description
+     flexi-table--decrease-column-description
      :transient t)
     ""
     ("u" flexi-table-toggle-current-column-sortable
-     :description flexi-table--current-column-sortable-description
+     :description
+     flexi-table--current-column-sortable-description
      :transient t)
     ("f" ignore
-     :description flexi-table--current-column-formatter-description)
+     :description
+     flexi-table--current-column-formatter-description)
     ("a" flexi-table-cycle-current-column-alignment
-     :description flexi-table--current-column-alignment-description
+     :description
+     flexi-table--current-column-alignment-description
      :transient t)
     ("p" flexi-table-set-current-column-padding
-     :description flexi-table--current-column-padding-description
+     :description
+     flexi-table--current-column-padding-description
      :transient t)]
-   ["Sort"
-    ("s" flexi-table-sort-current-column
-     :description flexi-table--sort-current-column-description
-     :transient t)
-    ("0" "Restore original order"
-     (lambda () (interactive) (flexi-table-sort -1))
-     :transient t)]
-   ["Layout"
+   [:class transient-column
+    :if (lambda () flexi-table-menu-extra-suffixes)
+    :description (lambda ()
+                   (if (functionp flexi-table-menu-extra-suffixes-description)
+                       (funcall flexi-table-menu-extra-suffixes-description)
+                     flexi-table-menu-extra-suffixes-description))
+    :setup-children
+    (lambda (&rest _)
+      (transient-parse-suffixes
+       (oref transient--prefix
+             command)
+       flexi-table-menu-extra-suffixes))]]
+  [["Layout"
     ("M-<left>" "Move left" flexi-table-move-column-left
      :transient t)
     ("M-<right>" "Move right" flexi-table-move-column-right
      :transient t)
     ("+" "Add column" flexi-table-add-column :transient t)
     ("-" "Remove column" flexi-table-remove-current-column
+     :transient t)]]
+  [["Sort"
+    ("s" flexi-table-sort-current-column
+     :description flexi-table--sort-current-column-description
+     :transient t)
+    ("0" "Restore original order"
+     (lambda ()
+       (interactive)
+       (flexi-table-sort -1))
      :transient t)]
    ["Settings"
     ("R" "Reset layout" flexi-table-reset-columns :transient t)
