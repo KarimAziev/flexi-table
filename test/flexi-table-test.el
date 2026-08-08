@@ -40,6 +40,29 @@
       (should (= (length flexi-table-entries) 1))
       (should (equal (flexi-table-current-id) 1)))))
 
+(ert-deftest flexi-table-column-action-receives-cell-context ()
+  (with-temp-buffer
+    (let* ((entry '((id . 1) (owner (login . "octocat"))))
+           called)
+      (flexi-table-setup
+       `(((owner login)
+          :name "Owner"
+          :width 16
+          :action ,(lambda (value row table)
+                     (setq called (list value row table)))))
+       (list entry)
+       :key-function #'flexi-table-test--key)
+      (goto-char (point-min))
+      (search-forward "octocat")
+      (let ((button (button-at (1- (point)))))
+        (should button)
+        (should (equal (button-get button 'face)
+                       '(flexi-table-cell flexi-table-action-button)))
+        (button-activate button))
+      (should (equal (car called) "octocat"))
+      (should (eq (cadr called) entry))
+      (should (eq (caddr called) (current-buffer))))))
+
 (ert-deftest flexi-table-sorts-numeric-columns ()
   (with-temp-buffer
     (flexi-table-setup
@@ -198,6 +221,39 @@
       (flexi-table-reset-filters)
       (should-not flexi-table-filters)
       (should (= (hash-table-count flexi-table--rendered) 3)))))
+
+(ert-deftest flexi-table-collection-values-are-independent-filter-buttons ()
+  (with-temp-buffer
+    (flexi-table-setup
+     '((name :name "Name" :width 10)
+       (topics :name "Topics" :width 24 :filter-values t))
+     '(((id . 1) (name . "one") (topics . ["elisp" "tables"]))
+       ((id . 2) (name . "two") (topics "elisp" "github"))
+       ((id . 3) (name . "three") (topics . ["rust"])))
+     :key-function #'flexi-table-test--key)
+    (goto-char (point-min))
+    (search-forward "tables")
+    (let ((button (button-at (1- (point)))))
+      (should button)
+      (should (equal (button-get button 'flexi-table-filter-value) "tables"))
+      (button-activate button))
+    (should (equal flexi-table-filters '((topics . "tables"))))
+    (should (= (hash-table-count flexi-table--rendered) 1))
+    (should (string-match-p "one" (buffer-string)))
+    (flexi-table-reset-filters)
+    (goto-char (point-min))
+    (search-forward ",")
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) "elisp")))
+      (flexi-table-toggle-filter-at-point))
+    (should (equal flexi-table-filters '((topics . "elisp"))))
+    (should (= (hash-table-count flexi-table--rendered) 2))
+    (flexi-table-reset-filters)
+    (let ((records (flexi-table--filter-value-records
+                    (flexi-table--find-column "Topics"))))
+      (should (equal (mapcar #'car records)
+                     '("elisp" "github" "rust" "tables")))
+      (should (= (nth 2 (assoc "elisp" records)) 2)))))
 
 (ert-deftest flexi-table-column-menu-uses-structured-descriptions ()
   (with-temp-buffer

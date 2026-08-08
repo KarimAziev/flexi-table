@@ -22,7 +22,7 @@ compile:
 		-f batch-byte-compile flexi-table.el
 
 test:
-	$(BATCH) -L test -l test/flexi-table-test.el \
+	$(BATCH) -L test -l ./flexi-table.el -l test/flexi-table-test.el \
 		-f ert-run-tests-batch-and-exit
 
 lint: checkdoc package-lint

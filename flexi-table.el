@@ -91,6 +91,11 @@ It inherits fixed-pitch font metrics so character widths match table cells."
   "Face used for a filterable cell whose value is currently active."
   :group 'flexi-table)
 
+(defface flexi-table-action-button
+  '((t :inherit link))
+  "Face used for cells that invoke a consumer-defined action."
+  :group 'flexi-table)
+
 (defcustom flexi-table-padding 1
   "Number of spaces before each table row and its header."
   :type 'natnum
@@ -307,7 +312,50 @@ not turn the transient into one dense horizontal sentence."
   "Return non-nil when COLUMN supports declarative value filtering."
   (and column
        (or (plist-get (cdr column) :filterable)
+           (plist-get (cdr column) :filter-values)
            (functionp (plist-get (cdr column) :filter-predicate)))))
+
+(defun flexi-table--column-filter-values (column value)
+  "Return the individual filter values represented by COLUMN's VALUE.
+The `:filter-values' column property can be a function of VALUE or any
+non-nil value, in which case lists and vectors are expanded.  Scalar values
+  are returned as a one-element list."
+  (let ((spec (plist-get (cdr column) :filter-values)))
+    (cond
+     ((functionp spec)
+      (let ((values (funcall spec value)))
+        (cond
+         ((null values) nil)
+         ((vectorp values) (append values nil))
+         ((listp values) values)
+         (t (list values)))))
+     ((not spec) (list value))
+     ((null value) nil)
+     ((vectorp value) (append value nil))
+     ((listp value) value)
+     (t (list value)))))
+
+(defun flexi-table--format-filter-value (column value)
+  "Return COLUMN's display label for one collection filter VALUE."
+  (let* ((formatter (plist-get (cdr column) :filter-value-formatter))
+         (formatted
+          (cond
+           ((functionp formatter) (funcall formatter value))
+           ((stringp formatter) (format formatter value))
+           ((null value) "")
+           ((stringp value) value)
+           (t (format "%s" value)))))
+    (if (stringp formatted) formatted (format "%s" (or formatted "")))))
+
+(defun flexi-table--format-filter-values (column value)
+  "Format COLUMN's collection VALUE as individually identifiable labels."
+  (let ((separator (or (plist-get (cdr column) :filter-separator) ", ")))
+    (mapconcat
+     (lambda (item)
+       (propertize (flexi-table--format-filter-value column item)
+                   'flexi-table-filter-value item))
+     (flexi-table--column-filter-values column value)
+     separator)))
 
 (defun flexi-table--find-column-by-field (field &optional columns)
   "Return the column for FIELD from COLUMNS or the complete column catalog."
@@ -326,20 +374,26 @@ not turn the transient into one dense horizontal sentence."
 (defun flexi-table--filter-value-label (column value)
   "Return a concise display label for COLUMN's filter VALUE."
   (let ((label (flexi-table--sanitize-label
-                (flexi-table--format-value column value))))
+                (if (plist-get (cdr column) :filter-values)
+                    (flexi-table--format-filter-value column value)
+                  (flexi-table--format-value column value)))))
     (if (string-empty-p label) "(empty)" label)))
 
 (defun flexi-table--column-filter-match-p (column selected entry)
   "Return non-nil when ENTRY's COLUMN value matches SELECTED.
 
 When COLUMN declares `:filter-predicate', call it with the raw cell value,
-SELECTED, ENTRY, and the current table buffer.  Otherwise compare values using
-`equal'."
+SELECTED, ENTRY, and the current table buffer.  A column with `:filter-values'
+matches when one of its individual values equals SELECTED.  Otherwise compare
+the complete raw value using `equal'."
   (let* ((value (flexi-table--column-value column entry))
          (predicate (plist-get (cdr column) :filter-predicate)))
-    (if (functionp predicate)
-        (funcall predicate value selected entry (current-buffer))
-      (equal value selected))))
+    (cond
+     ((functionp predicate)
+      (funcall predicate value selected entry (current-buffer)))
+     ((plist-get (cdr column) :filter-values)
+      (member selected (flexi-table--column-filter-values column value)))
+     (t (equal value selected)))))
 
 (defun flexi-table--entry-visible-p (entry)
   "Return non-nil when ENTRY passes consumer and declarative filters."
@@ -430,6 +484,8 @@ PATH may be a symbol, a string, or a list describing nested fields."
          (formatter (plist-get props :formatter))
          (formatted
           (cond
+           ((plist-get props :filter-values)
+            (flexi-table--format-filter-values column value))
            ((functionp formatter) (funcall formatter value))
            ((stringp formatter) (format formatter (or value "")))
            ((null value) "")
@@ -488,6 +544,36 @@ When TRUNCATE is non-nil, truncate values wider than WIDTH."
    (button-get button 'flexi-table-filter-field)
    (button-get button 'flexi-table-filter-value)))
 
+(defun flexi-table--cell-button-action (button)
+  "Invoke the consumer action represented by BUTTON."
+  (let ((action (button-get button 'flexi-table-cell-action))
+        (value (button-get button 'flexi-table-cell-value))
+        (entry (button-get button 'flexi-table-cell-entry))
+        (table (button-get button 'flexi-table-cell-table)))
+    (when (and (functionp action) (buffer-live-p table))
+      (with-current-buffer table
+        (funcall action value entry table)))))
+
+(defun flexi-table--make-cell-button
+    (start end column value entry label)
+  "Make text from START to END an action button for COLUMN.
+VALUE and ENTRY are passed to the column action.  LABEL describes the cell."
+  (when (< start end)
+    (make-text-button
+     start end
+     'action #'flexi-table--cell-button-action
+     'follow-link t
+     'face '(flexi-table-cell flexi-table-action-button)
+     'mouse-face 'highlight
+     'help-echo
+     (or (plist-get (cdr column) :action-help)
+         (format "Activate %s: %s"
+                 (flexi-table--column-name column) label))
+     'flexi-table-cell-action (plist-get (cdr column) :action)
+     'flexi-table-cell-value value
+     'flexi-table-cell-entry entry
+     'flexi-table-cell-table (current-buffer))))
+
 (defun flexi-table--make-filter-button
     (start end column value label)
   "Make text from START to END a filter button for COLUMN and VALUE.
@@ -543,12 +629,32 @@ LAST-COLUMN-P means not to force trailing padding beyond the column width."
      (list 'flexi-table-column name
            'flexi-table-field (car column)
            'help-echo (format "%s: %s" name label)))
-    (when (and (flexi-table--column-filterable-p column)
-               (not (string-empty-p display-label)))
-      (flexi-table--make-filter-button
-       (+ start leading-space)
-       (+ start leading-space (length display-label))
-       column value display-label))
+    (unless (string-empty-p display-label)
+      (cond
+       ((flexi-table--column-filterable-p column)
+        (if (plist-get (cdr column) :filter-values)
+            (let ((position (+ start leading-space))
+                  (limit (+ start leading-space (length display-label))))
+              (while (< position limit)
+                (let* ((item (get-text-property
+                              position 'flexi-table-filter-value))
+                       (next (or (next-single-property-change
+                                  position 'flexi-table-filter-value nil limit)
+                                 limit)))
+                  (when item
+                    (flexi-table--make-filter-button
+                     position next column item
+                     (buffer-substring-no-properties position next)))
+                  (setq position next))))
+          (flexi-table--make-filter-button
+           (+ start leading-space)
+           (+ start leading-space (length display-label))
+           column value display-label)))
+       ((functionp (plist-get (cdr column) :action))
+        (flexi-table--make-cell-button
+         (+ start leading-space)
+         (+ start leading-space (length display-label))
+         column value entry display-label))))
     (unless last-column-p
       (insert (propertize
                (make-string (flexi-table--column-padding column) ?\s)
@@ -1557,10 +1663,33 @@ does not express the desired matching behavior."
   (unless (flexi-table-current-entry)
     (user-error "No table row at point"))
   (if-let* ((column (flexi-table--filter-column-at-point)))
-      (flexi-table-toggle-filter
-       (car column)
-       (flexi-table--column-value column
-                                  (flexi-table-current-entry)))
+      (let* ((button (button-at (point)))
+             (raw (flexi-table--column-value
+                   column (flexi-table-current-entry)))
+             (values (and (plist-get (cdr column) :filter-values)
+                          (flexi-table--column-filter-values column raw))))
+        (flexi-table-toggle-filter
+         (car column)
+         (if (and button
+                  (equal (button-get button 'flexi-table-filter-field)
+                         (car column)))
+             (button-get button 'flexi-table-filter-value)
+           (cond
+            ((null values) raw)
+            ((null (cdr values)) (car values))
+            (t
+             (let* ((records
+                     (mapcar
+                      (lambda (value)
+                        (cons (flexi-table--filter-value-label column value)
+                              value))
+                      values))
+                    (choice
+                     (completing-read
+                      (format "%s value: "
+                              (flexi-table--column-name column))
+                      (mapcar #'car records) nil t)))
+               (cdr (assoc-string choice records))))))))
     (user-error "The current column is not filterable")))
 
 (defun flexi-table--read-filter-column (&optional active-only)
@@ -1587,11 +1716,13 @@ does not express the desired matching behavior."
   "Return display, raw value, and count records for COLUMN."
   (let (counts)
     (dolist (entry flexi-table-entries)
-      (let* ((value (flexi-table--column-value column entry))
-             (cell (cl-assoc value counts :test #'equal)))
-        (if cell
-            (setcdr cell (1+ (cdr cell)))
-          (push (cons value 1) counts))))
+      (dolist (value
+               (flexi-table--column-filter-values
+                column (flexi-table--column-value column entry)))
+        (let ((cell (cl-assoc value counts :test #'equal)))
+          (if cell
+              (setcdr cell (1+ (cdr cell)))
+            (push (cons value 1) counts)))))
     (let (records used-labels)
       (dolist (cell counts)
         (let* ((value (car cell))
@@ -1934,7 +2065,7 @@ Use FALLBACK as its display value when VALUE is nil."
     ("+" "Add column" flexi-table-add-column :transient t)
     ("-" "Remove column" flexi-table-remove-current-column
      :transient t)]]
-  [["Sort"
+  [["Sort & Filters"
     ("s" flexi-table-sort-current-column
      :description flexi-table--sort-current-column-description
      :transient t)
@@ -1942,7 +2073,8 @@ Use FALLBACK as its display value when VALUE is nil."
      (lambda ()
        (interactive)
        (flexi-table-sort -1))
-     :transient t)]
+     :transient t)
+    ("/" "Filters" flexi-table-filters-menu)]
    ["Settings"
     ("R" "Reset layout" flexi-table-reset-columns :transient t)
     ("S" "Save layout" flexi-table-save-columns

@@ -209,9 +209,14 @@ a list describing a nested alist path, for example =((owner login) :name
 | =:getter=           | Function called with =(ENTRY TABLE-BUFFER)= to return the raw value. |
 | =:formatter=        | Function called with the raw value, or a =format= control string. |
 | =:displayer=        | Function called with =(FORMATTED MAX-PIXELS TABLE-BUFFER)= for final display processing. |
+| =:action=           | Function called with =(CELL-VALUE ENTRY TABLE-BUFFER)= when the cell is activated. |
+| =:action-help=      | Optional help text for an actionable cell. |
 | =:sortable=         | Whether sorting is allowed.  Sorting is enabled by default. |
 | =:sort-predicate=   | Less-than predicate called with two raw values. |
 | =:filterable=       | Whether non-empty cells act as filter buttons. |
+| =:filter-values=    | Expand a list/vector cell into independently clickable filter values.  It can also be a function of the raw cell value. |
+| =:filter-value-formatter= | Function or format string used to label each expanded filter value. |
+| =:filter-separator= | String placed between expanded filter values; defaults to =", "=. |
 | =:filter-predicate= | Function called with =(CELL-VALUE SELECTED-VALUE ENTRY TABLE-BUFFER)=.  Providing one also makes the column filterable. |
 | =:face=             | Face applied to the column's cells. |
 | =:color=            | Foreground color or face-like value used when =:face= is absent. |
@@ -219,6 +224,11 @@ a list describing a nested alist path, for example =((owner login) :name
 
 Rows other than the final column are truncated to their effective width.  The
 final column is allowed to extend naturally.
+
+An actionable cell is rendered as a link-style text button.  Its callback
+receives the raw value even when the displayed label was transformed by a
+formatter.  When a column declares both filtering and an action, the filter
+button takes precedence so one click never has two meanings.
 
 * Setup options
 
@@ -316,6 +326,23 @@ A column with =:filterable t= renders its non-empty values as buttons.  Click a
 cell or press =f= on it to toggle a filter for that raw value.  Multiple column
 filters are combined with logical AND.  Press =/= to open the filter Transient,
 where filters can be selected from all values, removed individually, or reset.
+
+For a list or vector column, =:filter-values t= renders every element as its
+own button and makes the filter menu count elements rather than complete
+collections:
+
+#+begin_src elisp
+(topics
+ :name "Topics"
+ :width 30
+ :filter-values t
+ :filter-value-formatter #'capitalize)
+#+end_src
+
+The default matching rule then means “this cell contains the selected value.”
+Use a function as =:filter-values= when the raw collection first needs to be
+normalized.  An explicit =:filter-predicate= can still replace containment
+with a consumer-specific rule.
 
 Use =:filter-predicate= for matching rules other than =equal=.  For example,
 this column treats the selected value as a lower bound:
