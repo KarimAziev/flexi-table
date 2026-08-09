@@ -1838,6 +1838,7 @@ does not express the desired matching behavior."
 ;;;###autoload (autoload 'flexi-table-filters-menu "flexi-table" nil t)
 (transient-define-prefix flexi-table-filters-menu ()
   "Filter rows using declaratively filterable table columns."
+  :refresh-suffixes t
   [:description flexi-table--active-filters-description
    ("f" flexi-table-toggle-filter-at-point
     :description flexi-table--filter-at-point-description
