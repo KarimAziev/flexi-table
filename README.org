@@ -20,9 +20,9 @@ specifications:
 #+end_src
 
 The renderer supplies the buffer mode, row and header rendering, sorting,
-filtering, column editing, incremental updates, and Transient interfaces.  A
-consumer remains responsible for obtaining its data and deciding what an
-entry means.
+filtering, column editing, incremental updates, Eldoc column feedback, row
+inspection, and Transient interfaces.  A consumer remains responsible for
+obtaining its data and deciding what an entry means.
 
 The implementation was extracted from [[https://github.com/KarimAziev/igist][igist]] and generalized while adding
 stable asynchronous updates, declarative filters, consumer-scoped layouts,
@@ -46,6 +46,7 @@ and metric-safe styled headers.
   - [[#replacing-and-appending][Replacing and appending]]
   - [[#incremental-and-asynchronous-updates][Incremental and asynchronous updates]]
 - [[#sorting-and-filtering][Sorting and filtering]]
+- [[#exporting-to-org-mode][Exporting to Org mode]]
 - [[#editing-columns][Editing columns]]
 - [[#headers-and-faces][Headers and faces]]
 - [[#default-key-bindings][Default key bindings]]
@@ -308,7 +309,10 @@ For network callbacks or other streams, queue each changed entry:
 Updates received within =flexi-table-async-update-delay= are coalesced into one
 render.  Point, the logical row and column, window starts, horizontal scroll,
 and vertical scroll are preserved independently for every window displaying
-the table.
+the table.  Moving with =flexi-table-forward-column= or
+=flexi-table-backward-column= during an update stream remains stable: column
+navigation skips inter-column padding and restoration follows the selected
+column rather than an obsolete character position.
 
 When a sort is active, row replacement schedules an ordered refresh.  When a
 consumer filter or declarative filter is active, visibility is recomputed
@@ -357,6 +361,27 @@ this column treats the selected value as a lower bound:
    (>= cell-value selected-value)))
 #+end_src
 
+* Exporting to Org mode
+
+Press =C-c M-e=, select =Export as Org= from the column Transient, or run
+=M-x flexi-table-export-org= to open the current view as an editable Org mode
+table in a new buffer.  The export contains the active columns in their
+current order and uses their current names.  Active filters and sorting are
+applied to the exported rows.
+
+Formatted values are exported without screen-width truncation or padding.
+Display faces, buttons, header sort indicators, and other interactive text
+properties are omitted.  Multiline cells are folded onto one line and literal
+vertical bars are written using Org's =\vert{}= form.
+
+For programmatic use, =flexi-table-org-string= returns the same Org table as a
+plain string:
+
+#+begin_src elisp
+(with-current-buffer table-buffer
+  (flexi-table-org-string))
+#+end_src
+
 * Editing columns
 
 Press =C= or =?= to open the column Transient.  It presents the active layout
@@ -368,7 +393,17 @@ as structured, wrapped lines and provides operations for:
 - cycling alignment and setting right padding;
 - sorting by the selected column;
 - moving, adding, or removing columns; and
-- resetting or saving the complete layout.
+- resetting or saving the complete layout; and
+- inspecting the complete row object with =i=.
+
+Eldoc is enabled in table buffers by default.  It displays the current
+column's heading, field path, and formatted cell value as point moves through
+the table.  Set =flexi-table-enable-eldoc= to nil to disable it.
+
+From the column Transient, press =i= to run
+=flexi-table-inspect-current-entry=.  The complete, untruncated row object is
+pretty-printed in a read-only Emacs Lisp buffer, which is useful when a visible
+cell shows only part of a nested API response.
 
 Fast resizing is controlled by =flexi-table-resize-strategy=.  Its default
 value, 20, repaints at most twenty nearby visible rows immediately and queues a
@@ -422,6 +457,7 @@ The following faces can be customized:
 | =flexi-table-header-column-filtered=  | Column with an active filter. |
 | =flexi-table-filter-button=           | Clickable filterable cells. |
 | =flexi-table-filter-button-active=    | Cell matching its column's active filter. |
+| =flexi-table-action-button=           | Cell invoking a consumer-defined action. |
 
 The metric face is applied with higher precedence than decorative header
 faces, including on the spaces between columns.  Consequently a theme may use
@@ -443,6 +479,7 @@ between headings and row cells.
 | =C-c C-d=                      | Remove a column.                                           |
 | =C-c C-e=                      | Edit a column property.                                    |
 | =C-c C-s=                      | Save the current layout to its configured Custom variable. |
+| =C-c M-e=                      | Export the current view to a new Org buffer.                |
 | =mouse-1= on a heading         | Sort by that column.                                       |
 | =mouse-1= on a filterable cell | Toggle its value filter.                                   |
 
@@ -455,6 +492,8 @@ The most relevant ones are:
 - =flexi-table-use-header-line=;
 - =flexi-table-resize-strategy= and =flexi-table-resize-idle-delay=;
 - =flexi-table-async-update-delay=;
+- =flexi-table-enable-eldoc=, =flexi-table-inspect-buffer-name=, and
+  =flexi-table-org-export-buffer-name=;
 - =flexi-table-column-comp-read-threshold=;
 - =flexi-table-menu-column-line-width=; and
 - the graphical and terminal sort indicators.

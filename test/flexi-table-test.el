@@ -25,6 +25,53 @@
       (should (string-match-p "alpha" (buffer-string)))
       (should (= (line-number-at-pos (point-max)) 3)))))
 
+(ert-deftest flexi-table-eldoc-describes-current-column ()
+  (with-temp-buffer
+    (flexi-table-setup
+     '(((owner login) :name "Owner" :width 16))
+     '(((id . 1) (owner (login . "octocat"))))
+     :key-function #'flexi-table-test--key)
+    (goto-char (point-min))
+    (flexi-table-goto-column "Owner")
+    (should (memq #'flexi-table-eldoc-function
+                  eldoc-documentation-functions))
+    (let (message properties)
+      (flexi-table-eldoc-function
+       (lambda (documentation &rest metadata)
+         (setq message (substring-no-properties documentation)
+               properties metadata)))
+      (should (equal (plist-get properties :thing) "Column Owner"))
+      (should (eq (plist-get properties :face)
+                  'font-lock-keyword-face))
+      (should (string-match-p "Field: owner.login" message))
+      (should (string-match-p "Value: octocat" message)))))
+
+(ert-deftest flexi-table-inspects-complete-current-entry ()
+  (let ((flexi-table-inspect-buffer-name " *flexi-inspect-test*"))
+    (should (eq (plist-get
+                 (cdr (transient-get-suffix
+                       'flexi-table-columns-menu "i"))
+                 :command)
+                #'flexi-table-inspect-current-entry))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((entry '((id . 1) (name . "alpha")
+                         (metadata (nested . t)))))
+            (flexi-table-setup
+             flexi-table-test--columns (list entry)
+             :key-function #'flexi-table-test--key)
+            (goto-char (point-min))
+            (cl-letf (((symbol-function 'display-buffer) #'ignore))
+              (let ((inspection (flexi-table-inspect-current-entry)))
+                (should (buffer-live-p inspection))
+                (with-current-buffer inspection
+                  (should buffer-read-only)
+                  (should (derived-mode-p 'emacs-lisp-mode))
+                  (should (string-match-p "metadata" (buffer-string)))
+                  (should (string-match-p "nested" (buffer-string))))))))
+      (when-let* ((buffer (get-buffer flexi-table-inspect-buffer-name)))
+        (kill-buffer buffer)))))
+
 (ert-deftest flexi-table-updates-an-alist-mutated-in-place ()
   (with-temp-buffer
     (let ((entry '((id . 1) (name . "before") (score . 2))))
@@ -76,6 +123,62 @@
     (flexi-table--sort-by-name "Score")
     (goto-char (point-min))
     (should (equal (flexi-table-current-id) 2))))
+
+(ert-deftest flexi-table-org-export-preserves-the-current-view ()
+  (with-temp-buffer
+    (flexi-table-setup
+     '((name :name "Name" :width 8 :formatter upcase)
+       (score :name "Score" :width 5 :align right)
+       (note :name "Note" :width 8)
+       (language :name "Language" :width 10 :filterable t))
+     '(((id . 1) (name . "alpha") (score . 2)
+        (note . "first|line\ncontinued") (language . "Elisp"))
+       ((id . 2) (name . "beta") (score . 10)
+        (note . "plain") (language . "Elisp"))
+       ((id . 3) (name . "gamma") (score . 7)
+        (note . "filtered out") (language . "Rust")))
+     :key-function #'flexi-table-test--key)
+    (flexi-table-toggle-filter 'language "Elisp")
+    (flexi-table--sort-by-name "Score")
+    (flexi-table--sort-by-name "Score")
+    (flexi-table-remove-column "Language")
+    (goto-char (point-min))
+    (flexi-table-goto-column "Name")
+    (flexi-table-move-column-right)
+    (let ((org-table (flexi-table-org-string)))
+      (should (string-match-p "\\`| Score | Name  | Note" org-table))
+      (should (< (string-match "BETA" org-table)
+                 (string-match "ALPHA" org-table)))
+      (should-not (string-match-p "GAMMA" org-table))
+      (should-not (string-match-p "Language" org-table))
+      (should (string-match-p "first\\\\vert{}line continued" org-table))
+      (should-not (text-property-not-all 0 (length org-table) nil nil
+                                         org-table)))))
+
+(ert-deftest flexi-table-exports-current-view-to-an-org-buffer ()
+  (let ((flexi-table-org-export-buffer-name " *flexi-org-export-test*"))
+    (should (eq (keymap-lookup flexi-table-mode-map "C-c C-o")
+                #'flexi-table-export-org))
+    (should (eq (plist-get
+                 (cdr (transient-get-suffix
+                       'flexi-table-columns-menu "e"))
+                 :command)
+                #'flexi-table-export-org))
+    (unwind-protect
+        (with-temp-buffer
+          (flexi-table-setup
+           flexi-table-test--columns
+           '(((id . 1) (name . "alpha") (score . 2)))
+           :key-function #'flexi-table-test--key)
+          (cl-letf (((symbol-function 'display-buffer) #'ignore))
+            (let ((export (flexi-table-export-org)))
+              (should (buffer-live-p export))
+              (with-current-buffer export
+                (should (derived-mode-p 'org-mode))
+                (should (equal (buffer-string)
+                               "| Name  | Score |\n|-------+-------|\n| alpha |     2 |\n"))))))
+      (when-let* ((buffer (get-buffer flexi-table-org-export-buffer-name)))
+        (kill-buffer buffer)))))
 
 (ert-deftest flexi-table-edits-column-layout-locally ()
   (with-temp-buffer
@@ -334,6 +437,32 @@
         (should (equal (flexi-table-current-id) id))
         (should (= (current-column) column))
         (should (string-match-p "11" (buffer-string)))))))
+
+(ert-deftest flexi-table-async-update-keeps-manual-column-navigation ()
+  (with-temp-buffer
+    (let ((entry '((id . 1) (a . "aaaa") (b . "bbbb") (c . "cccc"))))
+      (flexi-table-setup
+       '((a :name "A" :width 6)
+         (b :name "B" :width 6)
+         (c :name "C" :width 6))
+       (list entry)
+       :key-function #'flexi-table-test--key)
+      (goto-char (point-min))
+      (flexi-table-goto-column "A")
+      (flexi-table-forward-column)
+      (should (equal (flexi-table-column-at-point) "B"))
+      (setf (alist-get 'a entry) "changed")
+      (flexi-table-queue-entry-update entry)
+      (flexi-table--flush-entry-updates (current-buffer))
+      (should (equal (flexi-table-column-at-point) "B"))
+      (should (zerop (plist-get (flexi-table--location-at (point))
+                                :column-offset)))
+      (flexi-table-backward-column)
+      (should (equal (flexi-table-column-at-point) "A"))
+      (setf (alist-get 'c entry) "updated")
+      (flexi-table-queue-entry-update entry)
+      (flexi-table--flush-entry-updates (current-buffer))
+      (should (equal (flexi-table-column-at-point) "A")))))
 
 (ert-deftest flexi-table-preserves-window-anchor-during-batch-update ()
   (let ((buffer (generate-new-buffer " *flexi-window-test*")))

@@ -42,6 +42,8 @@
 
 (require 'button)
 (require 'cl-lib)
+(require 'eldoc)
+(require 'pp)
 (require 'seq)
 (require 'subr-x)
 (require 'transient)
@@ -131,6 +133,21 @@ the complete table immediately, and nil updates only the current row."
 Calls to `flexi-table-queue-entry-update' made during this interval
 are rendered as one position-preserving operation."
   :type 'number
+  :group 'flexi-table)
+
+(defcustom flexi-table-enable-eldoc t
+  "Whether Flexi Table buffers describe the cell at point with Eldoc."
+  :type 'boolean
+  :group 'flexi-table)
+
+(defcustom flexi-table-inspect-buffer-name "*Flexi Table Row*"
+  "Buffer name used by `flexi-table-inspect-current-entry'."
+  :type 'string
+  :group 'flexi-table)
+
+(defcustom flexi-table-org-export-buffer-name "*Flexi Table Org Export*"
+  "Base buffer name used by `flexi-table-export-org'."
+  :type 'string
   :group 'flexi-table)
 
 (defcustom flexi-table-column-comp-read-threshold 15
@@ -247,6 +264,7 @@ not turn the transient into one dense horizontal sentence."
     (define-key map (kbd "C-c C-a") #'flexi-table-add-column)
     (define-key map (kbd "C-c C-d") #'flexi-table-remove-column)
     (define-key map (kbd "C-c C-s") #'flexi-table-save-columns)
+    (define-key map (kbd "C-c M-e") #'flexi-table-export-org)
     (define-key map (kbd "C") #'flexi-table-columns-menu)
     (define-key map (kbd "?") #'flexi-table-columns-menu)
     (define-key map (kbd "f") #'flexi-table-toggle-filter-at-point)
@@ -269,6 +287,10 @@ not turn the transient into one dense horizontal sentence."
               (make-hash-table :test #'equal))
   (setq-local flexi-table--pending-updates
               (make-hash-table :test #'equal))
+  (when flexi-table-enable-eldoc
+    (add-hook 'eldoc-documentation-functions
+              #'flexi-table-eldoc-function nil t)
+    (eldoc-mode 1))
   (add-hook 'kill-buffer-hook
             #'flexi-table--cancel-timers nil t)
   (when (fboundp 'header-line-indent-mode)
@@ -717,6 +739,64 @@ LAST-COLUMN-P means not to force trailing padding beyond the column width."
                      (list before after)))))
         (cdr (car (sort candidates (lambda (a b) (< (car a) (car b)))))))))
 
+(defun flexi-table--field-label (field)
+  "Return a concise display label for column FIELD."
+  (if (listp field)
+      (mapconcat (lambda (part) (format "%s" part)) field ".")
+    (format "%s" field)))
+
+(defun flexi-table-eldoc-function (callback &rest _ignored)
+  "Describe the Flexi Table cell at point by calling Eldoc CALLBACK."
+  (when-let* ((name (flexi-table--closest-column))
+              (column (flexi-table--find-column name)))
+    (let* ((entry (flexi-table-current-entry))
+           (value
+            (and entry
+                 (condition-case nil
+                     (flexi-table--sanitize-label
+                      (flexi-table--format-value
+                       column (flexi-table--column-value column entry)))
+                   (error nil))))
+           (value (and value
+                       (not (string-empty-p value))
+                       (truncate-string-to-width value 80 nil nil t))))
+      (funcall
+       callback
+       (concat
+        "Field: "
+        (propertize (flexi-table--field-label (car column))
+                    'face 'font-lock-variable-name-face)
+        (if value
+            (concat "  Value: "
+                    (propertize value 'face 'font-lock-string-face))
+          ""))
+       :thing (format "Column %s" name)
+       :face 'font-lock-keyword-face))))
+
+(defun flexi-table-inspect-current-entry ()
+  "Pretty-print the complete row object at point in a read-only buffer."
+  (interactive)
+  (let ((entry (flexi-table-current-entry))
+        (id (flexi-table-current-id))
+        (table (current-buffer)))
+    (unless entry
+      (user-error "No table row at point"))
+    (let ((buffer (get-buffer-create flexi-table-inspect-buffer-name)))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t)
+              (print-circle t)
+              (print-length nil)
+              (print-level nil))
+          (erase-buffer)
+          (emacs-lisp-mode)
+          (insert (format ";; Table: %s\n;; Entry ID: %s\n\n"
+                          (buffer-name table) id))
+          (pp entry (current-buffer))
+          (goto-char (point-min))
+          (view-mode 1)))
+      (display-buffer buffer)
+      buffer)))
+
 (defun flexi-table--row-bounds (id)
   "Return the buffer bounds of the row identified by ID."
   (let* ((marker (and (hash-table-p flexi-table--row-markers)
@@ -776,11 +856,11 @@ LAST-COLUMN-P means not to force trailing padding beyond the column width."
            (bounds (and id (flexi-table--row-bounds id)))
            (column (and id (flexi-table-column-at-point)))
            (column-start
-            (and column
+            (and column bounds
                  (or (previous-single-property-change
-                      (point) 'flexi-table-column nil
-                      (and bounds (car bounds)))
-                     (and bounds (car bounds))))))
+                      (min (1+ (point)) (cdr bounds))
+                      'flexi-table-column nil (car bounds))
+                     (car bounds)))))
       (list :id id
             :column column
             :column-offset (and column-start (- (point) column-start))
@@ -896,22 +976,25 @@ LAST-COLUMN-P means not to force trailing padding beyond the column width."
           (format "Flexi-Table[%d]"
                   (length flexi-table-entries)))))
 
+(defun flexi-table--view-entries ()
+  "Return entries in the order and visibility of the current table view."
+  (let ((entries (seq-copy flexi-table-entries)))
+    (when-let* ((sorter (flexi-table--sorter)))
+      (setq entries (sort entries sorter)))
+    (seq-filter #'flexi-table--entry-visible-p entries)))
+
 (defun flexi-table-print (&optional remember-position)
   "Render all current entries.
 When REMEMBER-POSITION is non-nil, preserve the selected row and column."
   (let ((render
          (lambda ()
            (let ((inhibit-read-only t)
-                 (entries (seq-copy flexi-table-entries))
-                 (sorter (flexi-table--sorter)))
-             (when sorter
-               (setq entries (sort entries sorter)))
+                 (entries (flexi-table--view-entries)))
              (flexi-table--clear-row-markers)
              (erase-buffer)
              (clrhash flexi-table--rendered)
              (dolist (entry entries)
-               (when (flexi-table--entry-visible-p entry)
-                 (flexi-table--render-entry entry)))
+               (flexi-table--render-entry entry))
              (set-buffer-modified-p nil)
              (flexi-table--update-mode-name)))))
     (if remember-position
@@ -919,6 +1002,92 @@ When REMEMBER-POSITION is non-nil, preserve the selected row and column."
           (funcall render))
       (funcall render)
       (goto-char (point-min)))))
+
+(defun flexi-table--org-cell (value)
+  "Return VALUE as a single Org table cell string."
+  (replace-regexp-in-string
+   "|" "\\vert{}"
+   (substring-no-properties (flexi-table--sanitize-label value))
+   t t))
+
+(defun flexi-table--org-row (cells widths columns)
+  "Return an Org table row for CELLS using WIDTHS and COLUMNS."
+  (concat
+   "| "
+   (mapconcat
+    #'identity
+    (cl-mapcar
+     (lambda (cell width column)
+       (flexi-table--align-label
+        cell width (plist-get (cdr column) :align) nil))
+     cells widths columns)
+    " | ")
+   " |"))
+
+(defun flexi-table-org-string ()
+  "Return the current table view as an Org mode table string.
+
+The result uses the active columns and their current names and order.  It
+contains only entries admitted by the active filters, in the active sort
+order.  Column formatters and displayers are applied, but display-only
+truncation, padding, faces, buttons, and sort indicators are not included."
+  (unless flexi-table-columns
+    (user-error "The table has no active columns"))
+  (let* ((columns flexi-table-columns)
+         (header (mapcar (lambda (column)
+                           (flexi-table--org-cell
+                            (flexi-table--column-name column)))
+                         columns))
+         (rows
+          (mapcar
+           (lambda (entry)
+             (mapcar
+              (lambda (column)
+                (flexi-table--org-cell
+                 (flexi-table--format-value
+                  column (flexi-table--column-value column entry))))
+              columns))
+           (flexi-table--view-entries)))
+         (widths
+          (cl-loop
+           for index below (length columns)
+           collect
+           (apply #'max
+                  (string-width (nth index header))
+                  (mapcar (lambda (row)
+                            (string-width (nth index row)))
+                          rows))))
+         (separator
+          (concat "|"
+                  (mapconcat (lambda (width)
+                               (make-string (+ width 2) ?-))
+                             widths "+")
+                  "|")))
+    (concat
+     (flexi-table--org-row header widths columns) "\n"
+     separator "\n"
+     (mapconcat (lambda (row)
+                  (flexi-table--org-row row widths columns))
+                rows "\n")
+     (and rows "\n"))))
+
+(declare-function org-mode "org")
+
+(defun flexi-table-export-org (&optional buffer-name)
+  "Export the current table view to a new Org buffer.
+
+BUFFER-NAME, when non-nil, is the base name for the new buffer.  Interactively,
+use `flexi-table-org-export-buffer-name'.  Return the created buffer."
+  (interactive)
+  (let ((table (flexi-table-org-string))
+        (buffer (generate-new-buffer
+                 (or buffer-name flexi-table-org-export-buffer-name))))
+    (with-current-buffer buffer
+      (org-mode)
+      (insert table)
+      (goto-char (point-min)))
+    (display-buffer buffer)
+    buffer))
 
 (defun flexi-table--header-label (column last-column-p)
   "Return the rendered heading for COLUMN.
@@ -1238,20 +1407,54 @@ without repeatedly moving point or changing window anchors."
                  limit))))
         found))))
 
+(defun flexi-table--column-positions-in-row ()
+  "Return visible column names and their start positions on the current row."
+  (when-let* ((id (flexi-table-current-id))
+              (bounds (flexi-table--row-bounds id)))
+    (let ((position (car bounds))
+          (limit (cdr bounds))
+          previous positions)
+      (while (< position limit)
+        (let ((name (flexi-table-column-at-point position)))
+          (when (and name (not (equal name previous)))
+            (push (cons name position) positions))
+          (setq previous name))
+        (setq position
+              (or (next-single-property-change
+                   position 'flexi-table-column nil limit)
+                  limit)))
+      (nreverse positions))))
+
 (defun flexi-table--forward-column (count)
-  "Move COUNT column property boundaries in the current row."
-  (let* ((id (flexi-table-current-id))
-         (bounds (and id (flexi-table--row-bounds id)))
-         (forward (> count 0))
-         (function (if forward
-                       #'next-single-property-change
-                     #'previous-single-property-change))
-         (limit (and bounds (if forward (cdr bounds) (car bounds)))))
-    (when bounds
-      (dotimes (_ (abs count))
-        (when-let* ((next (funcall function (point)
-                                   'flexi-table-column nil limit)))
-          (goto-char next))))))
+  "Move COUNT actual columns on the current row, skipping cell padding."
+  (unless (zerop count)
+    (let* ((positions (flexi-table--column-positions-in-row))
+           (name (flexi-table-column-at-point))
+           (current-index
+            (and name
+                 (cl-position name positions :key #'car :test #'equal)))
+           (forward (> count 0))
+           (base-index
+            (or current-index
+                (if forward
+                    (cl-position-if
+                     (lambda (cell) (> (cdr cell) (point))) positions)
+                  (let ((index 0) found)
+                    (dolist (cell positions found)
+                      (when (< (cdr cell) (point))
+                        (setq found index))
+                      (setq index (1+ index)))))))
+           (target-index
+            (and base-index
+                 (if current-index
+                     (+ base-index count)
+                   (+ base-index (if forward
+                                     (1- count)
+                                   (1+ count)))))))
+      (when (and target-index
+                 (>= target-index 0)
+                 (< target-index (length positions)))
+        (goto-char (cdr (nth target-index positions)))))))
 
 (defun flexi-table-forward-column (&optional count)
   "Move forward COUNT columns on the current row."
@@ -2047,7 +2250,8 @@ Use FALLBACK as its display value when VALUE is nil."
      flexi-table--current-column-padding-description
      :transient t)]
    [:class transient-column
-    :if (lambda () flexi-table-menu-extra-suffixes)
+    :if (lambda ()
+          flexi-table-menu-extra-suffixes)
     :description (lambda ()
                    (if (functionp flexi-table-menu-extra-suffixes-description)
                        (funcall flexi-table-menu-extra-suffixes-description)
@@ -2077,6 +2281,9 @@ Use FALLBACK as its display value when VALUE is nil."
      :transient t)
     ("/" "Filters" flexi-table-filters-menu)]
    ["Settings"
+    ("E" "Export as Org" flexi-table-export-org)
+    ("i" "Inspect full row" flexi-table-inspect-current-entry
+     :inapt-if-not flexi-table-current-entry)
     ("R" "Reset layout" flexi-table-reset-columns :transient t)
     ("S" "Save layout" flexi-table-save-columns
      :inapt-if-not flexi-table--columns-saveable-p
