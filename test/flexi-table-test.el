@@ -74,12 +74,14 @@
 
 (ert-deftest flexi-table-updates-an-alist-mutated-in-place ()
   (with-temp-buffer
-    (let ((entry '((id . 1) (name . "before") (score . 2))))
+    (let ((entry (copy-tree '((id . 1)
+                              (name . "before")
+                              (score . 2)))))
       (flexi-table-setup
        flexi-table-test--columns (list entry)
        :key-function #'flexi-table-test--key)
       (goto-char (point-min))
-      (search-forward "before")
+      (search-forward "before" nil t 1)
       (setf (alist-get 'name entry) "after")
       (flexi-table-update-entry entry)
       (should (string-match-p "after" (buffer-string)))
@@ -89,7 +91,9 @@
 
 (ert-deftest flexi-table-column-action-receives-cell-context ()
   (with-temp-buffer
-    (let* ((entry '((id . 1) (owner (login . "octocat"))))
+    (let* ((entry '((id . 1)
+                    (owner
+                     (login . "octocat"))))
            called)
       (flexi-table-setup
        `(((owner login)
@@ -100,7 +104,7 @@
        (list entry)
        :key-function #'flexi-table-test--key)
       (goto-char (point-min))
-      (search-forward "octocat")
+      (search-forward "octocat" nil t 1)
       (let ((button (button-at (1- (point)))))
         (should button)
         (should (equal (button-get button 'face)
@@ -108,7 +112,8 @@
         (button-activate button))
       (should (equal (car called) "octocat"))
       (should (eq (cadr called) entry))
-      (should (eq (caddr called) (current-buffer))))))
+      (should (eq (caddr called)
+                  (current-buffer))))))
 
 (ert-deftest flexi-table-sorts-numeric-columns ()
   (with-temp-buffer
@@ -161,7 +166,7 @@
                 #'flexi-table-export-org))
     (should (eq (plist-get
                  (cdr (transient-get-suffix
-                       'flexi-table-columns-menu "e"))
+                       'flexi-table-columns-menu "E"))
                  :command)
                 #'flexi-table-export-org))
     (unwind-protect
