@@ -157,7 +157,7 @@
 
 (ert-deftest flexi-table-exports-current-view-to-an-org-buffer ()
   (let ((flexi-table-org-export-buffer-name " *flexi-org-export-test*"))
-    (should (eq (keymap-lookup flexi-table-mode-map "C-c C-o")
+    (should (eq (keymap-lookup flexi-table-mode-map "C-c M-e")
                 #'flexi-table-export-org))
     (should (eq (plist-get
                  (cdr (transient-get-suffix
@@ -168,15 +168,18 @@
         (with-temp-buffer
           (flexi-table-setup
            flexi-table-test--columns
-           '(((id . 1) (name . "alpha") (score . 2)))
+           '(((id . 1)
+              (name . "alpha")
+              (score . 2)))
            :key-function #'flexi-table-test--key)
           (cl-letf (((symbol-function 'display-buffer) #'ignore))
             (let ((export (flexi-table-export-org)))
               (should (buffer-live-p export))
               (with-current-buffer export
                 (should (derived-mode-p 'org-mode))
-                (should (equal (buffer-string)
-                               "| Name  | Score |\n|-------+-------|\n| alpha |     2 |\n"))))))
+                (should
+                 (equal (buffer-string)
+                        "| Name  | Score |\n|-------+-------|\n| alpha |     2 |\n"))))))
       (when-let* ((buffer (get-buffer flexi-table-org-export-buffer-name)))
         (kill-buffer buffer)))))
 
