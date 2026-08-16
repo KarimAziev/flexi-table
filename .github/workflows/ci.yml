@@ -21,8 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - emacs-version: "29.1"
-            experimental: false
           - emacs-version: "30.1"
             experimental: false
           - emacs-version: snapshot

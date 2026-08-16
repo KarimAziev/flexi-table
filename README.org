@@ -59,7 +59,7 @@ and metric-safe styled headers.
 
 | Dependency  | Minimum version |
 |-------------+-----------------|
-| Emacs       | 29.1            |
+| Emacs       | 30.1            |
 | =transient= | 0.13.4          |
 
 * Installation
@@ -69,7 +69,7 @@ directly from this repository using one of the following methods.
 
 ** package-vc
 
-With Emacs 29 or newer:
+With Emacs 30.1 or newer:
 
 #+begin_src elisp
 (package-vc-install

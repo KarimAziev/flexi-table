@@ -5,7 +5,7 @@
 ;; Author: Karim Aziiev <karim.aziiev@gmail.com>
 ;; Keywords: convenience, tools
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (transient "0.13.4"))
+;; Package-Requires: ((emacs "30.1") (transient "0.13.4"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; URL: https://github.com/KarimAziev/flexi-table
 
